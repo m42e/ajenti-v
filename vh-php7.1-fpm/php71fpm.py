@@ -10,13 +10,13 @@ from ajenti.util import platform_select
 TEMPLATE_CONFIG_FILE = """
 [global]
 pid = %(pidfile)s
-error_log = /var/log/php5-fpm.log
+error_log = /var/log/php7.1-fpm.log
 
 [global-pool]
 user = www-data
 group = www-data
 
-listen = /var/run/php-fcgi.sock
+listen = /var/run/php/php7.1-fpm.sock
 listen.owner = www-data
 listen.group = www-data
 listen.mode = 0660
@@ -49,42 +49,32 @@ pm.max_spare_servers = %(sp_max)s
 %(php_extras)s
 """
 
-
-fpm_service_name = platform_select(
-    debian='php5-fpm',
-    default='php-fpm',
-)
+fpm_service_name = 'php7.1-fpm'
 
 
 @plugin
-class FPMServiceTest (SanityCheck):
+class PHP71FPMServiceTest (SanityCheck):
     def __init__(self):
-        self.type = _('PHP-FPM service')
+        self.type = _('PHP7.1-FPM service')
 
     def check(self):
         return ServiceMultiplexor.get().get_one(fpm_service_name).running
 
 
 @plugin
-class PHPFPM (ApplicationGatewayComponent):
-    id = 'php-fcgi'
-    title = 'PHP FastCGI'
+class PHP71FPM (ApplicationGatewayComponent):
+    id = 'php7.1-fcgi'
+    title = 'PHP 7.1 FastCGI'
 
     def init(self):
-        self.config_file = platform_select(
-            debian='/etc/php5/fpm/php-fpm.conf',
-            centos='/etc/php-fpm.conf',
-            arch='/etc/php/php-fpm.conf',
-        )
+        self.config_file = '/etc/php/7.1/fpm/php-fpm.conf'
 
     def __generate_pool(self, location, backend, name):
-        pm_min_default = 2
-        pm_max_default = 5
-        pm_min = backend.params.get('pm_min', pm_min_default) or pm_min_default
-        pm_max = backend.params.get('pm_max', pm_max_default) or pm_max_default
+        pm_min = backend.params.get('pm_min', 1) or 1
+        pm_max = backend.params.get('pm_max', 5) or 5
         user = backend.params.get('user', 'www-data') or 'www-data'
         group = backend.params.get('group', 'www-data') or 'www-data'
-        listen = backend.params.get('listen', '/var/run/ajenti-v-php-fcgi-' + name + '.sock') or '/var/run/ajenti-v-php-fcgi-'+ name + '.sock'
+        listen = backend.params.get('listen', '/var/run/ajenti-v-php7.1-fcgi-' + name + '.sock') or '/var/run/ajenti-v-php7.1-fcgi-'+ name + '.sock'
 
         extras = ''
 
@@ -106,15 +96,15 @@ class PHPFPM (ApplicationGatewayComponent):
             'user': user,
             'group': group,
             'pm': backend.params.get('pm', None) or 'dynamic',
-            'sp_min': max(pm_min_default, pm_min),
-            'sp_max': max(pm_max_default, pm_max),
+            'sp_min': min(2, pm_min),
+            'sp_max': min(max(6, pm_min), pm_max),
             'php_extras': extras,
         }
 
     def __generate_website(self, website):
         r = ''
         for location in website.locations:
-            if location.backend.type == 'php-fcgi':
+            if location.backend.type == 'php7.1-fcgi':
                 r += self.__generate_pool(location, location.backend, location.backend.id)
         return r
 
@@ -122,28 +112,24 @@ class PHPFPM (ApplicationGatewayComponent):
         if os.path.exists(self.config_file):
             os.unlink(self.config_file)
         cfg = TEMPLATE_CONFIG_FILE % {
-            'pidfile': platform_select(
-                debian='/var/run/php5-fpm.pid',
-                arch='/var/run/php-fpm.pid',
-                centos='/var/run/php-fpm/php-fpm.pid',
-            ),
+            'pidfile': '/var/run/php/php7.1-fpm.pid',
             'pools': '\n'.join(self.__generate_website(_) for _ in config.websites if _.enabled)
         }
         open(self.config_file, 'w').write(cfg)
 
     def apply_configuration(self):
-        PHPFPMRestartable.get().schedule()
+        PHP71FPMRestartable.get().schedule()
 
     def get_checks(self):
-        return [FPMServiceTest.new()]
+        return [PHP71FPMServiceTest.new()]
 
 
 @plugin
-class PHPFPMRestartable (Restartable):
+class PHP71FPMRestartable (Restartable):
     def restart(self):
         s = ServiceMultiplexor.get().get_one(fpm_service_name)
         print fpm_service_name, s, s.running
         if not s.running:
             s.start()
         else:
-            s.restart()
+            s.command('reload')
